@@ -2088,7 +2088,8 @@ function escapeHTML(value) {
   })();
 
   const _cloudCache = {};
-  let isInitializing = false; // 🔥 NAYA FLAG: Taake initial load par data upload na ho
+  let isInitializing = false;
+  let isPushing = false; // Lock to prevent infinite upload loops
 
   function settingsKeysFor(branch) {
     return {
@@ -2119,7 +2120,7 @@ function escapeHTML(value) {
     setupSync();
   }
 
-  // 🔥 BRANCH LOAD HOTE WAQT DATA UPLOAD NA HO
+  // Prevent pushing default data when app is booting
   const origLoadBranchData = window.loadBranchData;
   if (origLoadBranchData) {
       window.loadBranchData = function() {
@@ -2139,13 +2140,22 @@ function escapeHTML(value) {
     const localUpdated = localUpdatedStr ? parseInt(localUpdatedStr, 10) : 0;
     const cloudUpdated = (cloud.updatedAt && typeof cloud.updatedAt.toMillis === 'function') ? cloud.updatedAt.toMillis() : 0;
 
-    // Agar user ne is phone par kuch save nahi kiya (0), toh hamesha Cloud se download karo
+    // If last update was from this device, stop here to prevent loop
+    if (cloud.updatedBy === DEVICE_ID) {
+        if (cloudUpdated > 0 && localUpdated !== cloudUpdated) {
+            localStorage.setItem('_local_updated_' + branch.id, cloudUpdated.toString());
+        }
+        return; 
+    }
+
+    // If device has no timestamp, always download from cloud
     if (localUpdated === 0) {
         applyCloud(branch, cloud);
         return;
     }
 
-    if (cloudUpdated > localUpdated && cloud.updatedBy !== DEVICE_ID) {
+    // Compare times to see which is newer
+    if (cloudUpdated > localUpdated) {
         applyCloud(branch, cloud);
     } else if (localUpdated > cloudUpdated) {
         if (typeof D !== 'undefined' && Array.isArray(D.rows)) {
@@ -2165,14 +2175,14 @@ function escapeHTML(value) {
       });
     });
 
+    // Listen for tab focus / switching
     window.addEventListener('focus', () => { if (typeof BR !== 'undefined') checkAndSync(BR); });
     document.addEventListener('visibilitychange', () => { if (!document.hidden && typeof BR !== 'undefined') checkAndSync(BR); });
 
+    // Intercept localStorage saves
     const origSetItem = Store.setItem.bind(Store);
     Store.setItem = function(k, v) {
       origSetItem(k, v);
-      
-      // Agar initialization chal rahi hai, toh upload mat karo
       if (isInitializing) return; 
       if (isLocalFile) return;
 
@@ -2188,6 +2198,7 @@ function escapeHTML(value) {
 
       localStorage.setItem('_local_updated_' + targetBranch.id, Date.now().toString());
       
+      // Debounce uploads by 1.5 seconds
       clearTimeout(window._pushTimer);
       window._pushTimer = setTimeout(() => {
           forcePushToCloud(targetBranch);
@@ -2195,6 +2206,7 @@ function escapeHTML(value) {
       }, 1500);
     };
 
+    // Manual branch switch event
     const sel = document.getElementById('branchSel');
     if (sel) {
       sel.addEventListener('change', function() {
@@ -2204,8 +2216,11 @@ function escapeHTML(value) {
   }
 
   async function forcePushToCloud(branch) {
+    if (isPushing) return; // Prevent duplicate simultaneous uploads
     try {
       if (typeof D === 'undefined' || !Array.isArray(D.rows)) return;
+      isPushing = true;
+      
       const pushTime = Date.now();
       localStorage.setItem('_local_updated_' + branch.id, pushTime.toString());
 
@@ -2220,6 +2235,8 @@ function escapeHTML(value) {
     } catch(e) {
       console.error('Cloud save (rows) error:', e);
       if (typeof toast === 'function') toast('❌ Upload Error: ' + e.message, 'err', 5000);
+    } finally {
+      isPushing = false;
     }
   }
 
@@ -2269,6 +2286,7 @@ function escapeHTML(value) {
       updated = true;
     }
 
+    // Update local timestamp with cloud's timestamp to keep them in sync
     if (cloud.updatedAt && typeof cloud.updatedAt.toMillis === 'function') {
         localStorage.setItem('_local_updated_' + branch.id, cloud.updatedAt.toMillis().toString());
     }
