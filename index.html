@@ -2088,6 +2088,7 @@ function escapeHTML(value) {
   })();
 
   const _cloudCache = {};
+  let isInitializing = false; // 🔥 NAYA FLAG: Taake initial load par data upload na ho
 
   function settingsKeysFor(branch) {
     return {
@@ -2118,52 +2119,38 @@ function escapeHTML(value) {
     setupSync();
   }
 
+  // 🔥 BRANCH LOAD HOTE WAQT DATA UPLOAD NA HO
+  const origLoadBranchData = window.loadBranchData;
+  if (origLoadBranchData) {
+      window.loadBranchData = function() {
+          isInitializing = true;
+          origLoadBranchData.apply(this, arguments);
+          isInitializing = false;
+      };
+  }
+
   function checkAndSync(branch) {
     if (!branch) return;
     const cloud = _cloudCache[branch.id];
     if (!cloud) return;
+    if (BR.id !== branch.id) return;
 
-    let localUpdatedStr = localStorage.getItem('_local_updated_' + branch.id);
-    let localUpdated;
-    
-    if (localUpdatedStr) {
-        localUpdated = parseInt(localUpdatedStr, 10);
-    } else {
-        // 🔥 FIX: Agar timestamp nahi hai, check karo phone mein data hai kya?
-        const rawLocal = Store.getItem(branch.K);
-        let localHasData = false;
-        if (rawLocal) {
-            try {
-                const parsed = JSON.parse(rawLocal);
-                if (parsed && Array.isArray(parsed.rows) && parsed.rows.length > 0) {
-                    localHasData = true;
-                }
-            } catch(e) {}
-        }
-        
-        if (localHasData) {
-            // Phone mein data hai bina timestamp ke -> Iska matlab yeh naya hai. Upload karo!
-            localUpdated = Date.now();
-            localStorage.setItem('_local_updated_' + branch.id, localUpdated.toString());
-        } else {
-            localUpdated = 0; // Naya phone, data nahi hai
-        }
-    }
-
+    const localUpdatedStr = localStorage.getItem('_local_updated_' + branch.id);
+    const localUpdated = localUpdatedStr ? parseInt(localUpdatedStr, 10) : 0;
     const cloudUpdated = (cloud.updatedAt && typeof cloud.updatedAt.toMillis === 'function') ? cloud.updatedAt.toMillis() : 0;
 
-    // Agar Local zyada naya hai -> Upload to Cloud
-    if (localUpdated > cloudUpdated) {
-        if (BR.id === branch.id) {
-            if (typeof D !== 'undefined' && Array.isArray(D.rows)) {
-                debouncedPushRows(branch, D.rows);
-            }
-            debouncedPushSettings(branch);
-        }
-    } 
-    // Agar Cloud zyada naya hai -> Download to Local
-    else if (cloudUpdated > localUpdated && BR.id === branch.id && cloud.updatedBy !== DEVICE_ID) {
+    // Agar user ne is phone par kuch save nahi kiya (0), toh hamesha Cloud se download karo
+    if (localUpdated === 0) {
         applyCloud(branch, cloud);
+        return;
+    }
+
+    if (cloudUpdated > localUpdated && cloud.updatedBy !== DEVICE_ID) {
+        applyCloud(branch, cloud);
+    } else if (localUpdated > cloudUpdated) {
+        if (typeof D !== 'undefined' && Array.isArray(D.rows)) {
+            forcePushToCloud(branch);
+        }
     }
   }
 
@@ -2178,92 +2165,65 @@ function escapeHTML(value) {
       });
     });
 
-    setInterval(() => {
-      if (!document.hidden && typeof BR !== 'undefined') checkAndSync(BR);
-    }, 2000);
-
-    window.addEventListener('focus', () => {
-      if (typeof BR !== 'undefined') checkAndSync(BR);
-    });
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden && typeof BR !== 'undefined') checkAndSync(BR);
-    });
+    window.addEventListener('focus', () => { if (typeof BR !== 'undefined') checkAndSync(BR); });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && typeof BR !== 'undefined') checkAndSync(BR); });
 
     const origSetItem = Store.setItem.bind(Store);
     Store.setItem = function(k, v) {
       origSetItem(k, v);
+      
+      // Agar initialization chal rahi hai, toh upload mat karo
+      if (isInitializing) return; 
       if (isLocalFile) return;
 
-      let target = null;
+      let targetBranch = null;
       for (const br of BRANCHES) {
-        if (k === br.K) { target = { br, kind: 'rows' }; break; }
+        if (k === br.K) { targetBranch = br; break; }
         const sk = settingsKeysFor(br);
         if (k === sk.logo || k === sk.benchmark || k === sk.serviceHm || k === sk.defaultRate || k === sk.rateSrc) {
-          target = { br, kind: 'settings' }; break;
+          targetBranch = br; break;
         }
       }
-      if (!target) return;
+      if (!targetBranch) return;
 
-      localStorage.setItem('_local_updated_' + target.br.id, Date.now().toString());
-
-      if (target.kind === 'rows') {
-        try {
-          const data = JSON.parse(v);
-          if (data && Array.isArray(data.rows)) debouncedPushRows(target.br, data.rows);
-        } catch(e) {}
-      } else {
-        debouncedPushSettings(target.br);
-      }
-    };
-
-    const origRemoveItem = Store.removeItem.bind(Store);
-    Store.removeItem = function(k) {
-      origRemoveItem(k);
-      if (isLocalFile) return;
-      for (const br of BRANCHES) {
-        const sk = settingsKeysFor(br);
-        if (k === sk.logo || k === sk.benchmark || k === sk.serviceHm || k === sk.defaultRate || k === sk.rateSrc) {
-          localStorage.setItem('_local_updated_' + br.id, Date.now().toString());
-          debouncedPushSettings(br); return;
-        }
-      }
+      localStorage.setItem('_local_updated_' + targetBranch.id, Date.now().toString());
+      
+      clearTimeout(window._pushTimer);
+      window._pushTimer = setTimeout(() => {
+          forcePushToCloud(targetBranch);
+          forcePushSettingsToCloud(targetBranch);
+      }, 1500);
     };
 
     const sel = document.getElementById('branchSel');
     if (sel) {
       sel.addEventListener('change', function() {
-        setTimeout(() => checkAndSync(BR), 150);
+        setTimeout(() => checkAndSync(BR), 500);
       });
     }
   }
 
-  let pushRowTimer = null;
-  function debouncedPushRows(branch, rows) {
-    clearTimeout(pushRowTimer);
-    pushRowTimer = setTimeout(() => pushRowsToCloud(branch, rows), 500); // 0.5s delay
-  }
-
-  let pushSettingsTimer = null;
-  function debouncedPushSettings(branch) {
-    clearTimeout(pushSettingsTimer);
-    pushSettingsTimer = setTimeout(() => pushSettingsToCloud(branch), 500);
-  }
-
-  async function pushRowsToCloud(branch, rows) {
+  async function forcePushToCloud(branch) {
     try {
+      if (typeof D === 'undefined' || !Array.isArray(D.rows)) return;
+      const pushTime = Date.now();
+      localStorage.setItem('_local_updated_' + branch.id, pushTime.toString());
+
       await db.collection(CLOUD_COLLECTION).doc(branch.id).set({
-        rows: rows,
+        rows: D.rows,
         branchName: branch.name,
         updatedBy: DEVICE_ID,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
-      localStorage.setItem('_local_updated_' + branch.id, Date.now().toString());
+      
+      if (typeof toast === 'function') toast('☁️ Data Cloud par save ho gaya', 'ok', 2000);
     } catch(e) {
       console.error('Cloud save (rows) error:', e);
+      if (typeof toast === 'function') toast('❌ Upload Error: ' + e.message, 'err', 5000);
     }
   }
 
-  async function pushSettingsToCloud(branch) {
+  async function forcePushSettingsToCloud(branch) {
     try {
       await db.collection(CLOUD_COLLECTION).doc(branch.id).set({
         settings: settingsPayload(branch),
@@ -2271,7 +2231,6 @@ function escapeHTML(value) {
         updatedBy: DEVICE_ID,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
-      localStorage.setItem('_local_updated_' + branch.id, Date.now().toString());
     } catch(e) {
       console.error('Cloud save (settings) error:', e);
     }
@@ -2298,7 +2257,7 @@ function escapeHTML(value) {
       put(k.serviceHm,   cloud.settings.serviceHm);
       put(k.defaultRate, cloud.settings.defaultRate);
       put(k.rateSrc,     cloud.settings.rateSrc);
-
+      
       const bv = parseFloat(localStorage.getItem(k.benchmark));
       if (bv > 0 && bv <= 1000) BENCH = bv;
 
