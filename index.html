@@ -2141,8 +2141,8 @@ function escapeHTML(value) {
       logo:        branch.id === 'chilman' ? 'chilman_logo_v1' : 'tehzeeb_logo_v1',
       benchmark:   branch.B,
       serviceHm:   branch.S,
-      defaultRate: 'tehzeeb_default_rate',
-      rateSrc:     'tehzeeb_rate_src'
+      defaultRate: branch.id + '_default_rate',
+rateSrc:     branch.id + '_rate_src'
     };
   }
 
