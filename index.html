@@ -2071,13 +2071,11 @@ function escapeHTML(value) {
   const db = firebase.firestore();
   const CLOUD_COLLECTION = 'generator_reports';
 
-  // 🛑 SECURITY LOCK: Agar file mobile ki memory (Downloads) se khuli hai, to usay online data change karne ki ijazat nahi hogi.
   const isLocalFile = window.location.protocol === 'file:';
-  
   if (isLocalFile) {
-      setTimeout(() => {
-          alert("⚠️ Aap yeh file mobile ki Downloads se khol rahe hain.\n\nYeh file ab ONLINE DATA ko change NAHI kar sakti. Baraye meharbani Netlify wala LINK kholain taake aapka data mehfooz rahe.");
-      }, 800);
+    setTimeout(() => {
+      alert("⚠️ Aap yeh file mobile ki Downloads se khol rahe hain.\n\nYeh file ab ONLINE DATA ko change NAHI kar sakti. Baraye meharbani Netlify wala LINK kholain taake aapka data mehfooz rahe.");
+    }, 800);
   }
 
   const DEVICE_ID = (() => {
@@ -2091,11 +2089,31 @@ function escapeHTML(value) {
 
   const _cloudCache = {};
 
+  function settingsKeysFor(branch) {
+    return {
+      logo:        branch.id === 'chilman' ? 'chilman_logo_v1' : 'tehzeeb_logo_v1',
+      benchmark:   branch.B,
+      serviceHm:   branch.S,
+      defaultRate: 'tehzeeb_default_rate',
+      rateSrc:     'tehzeeb_rate_src'
+    };
+  }
+
+  function settingsPayload(branch) {
+    const k = settingsKeysFor(branch);
+    return {
+      logo:        Store.getItem(k.logo)        || null,
+      benchmark:   Store.getItem(k.benchmark)   || null,
+      serviceHm:   Store.getItem(k.serviceHm)   || null,
+      defaultRate: Store.getItem(k.defaultRate) || null,
+      rateSrc:     Store.getItem(k.rateSrc)     || null
+    };
+  }
+
   function waitForApp() {
     if (typeof D === 'undefined' || typeof render !== 'function' ||
         typeof BR === 'undefined' || typeof BRANCHES === 'undefined') {
-      setTimeout(waitForApp, 100);
-      return;
+      setTimeout(waitForApp, 100); return;
     }
     setupSync();
   }
@@ -2103,21 +2121,12 @@ function escapeHTML(value) {
   function setupSync() {
     BRANCHES.forEach(branch => {
       const ref = db.collection(CLOUD_COLLECTION).doc(branch.id);
-      
       ref.onSnapshot(snap => {
-        if (snap.exists) {
-          _cloudCache[branch.id] = snap.data();
-        } else {
-          _cloudCache[branch.id] = null;
-        }
-
-        if (BR.id !== branch.id) return; 
-        
+        _cloudCache[branch.id] = snap.exists ? snap.data() : null;
+        if (BR.id !== branch.id) return;
         const cloud = snap.data();
-        if (!cloud || !Array.isArray(cloud.rows)) return;
-        
-        if (cloud.updatedBy === DEVICE_ID) return; 
-        
+        if (!cloud) return;
+        if (cloud.updatedBy === DEVICE_ID) return;
         applyCloud(branch, cloud);
       }, err => {
         console.error('Firebase sync error:', err);
@@ -2128,16 +2137,40 @@ function escapeHTML(value) {
     const origSetItem = Store.setItem.bind(Store);
     Store.setItem = function(k, v) {
       origSetItem(k, v);
-      
-      // 🛑 AGAR FILE DOWNLOADS SE KHULI HAI, TO CLOUD PAR KUCH NA BHEJEIN
-      if (isLocalFile) return; 
+      if (isLocalFile) return;
 
-      const branch = BRANCHES.find(x => x.K === k);
-      if (!branch) return;
-      try {
-        const data = JSON.parse(v);
-        if (data && Array.isArray(data.rows)) pushToCloud(branch, data.rows);
-      } catch(e) {}
+      let target = null;
+      for (const br of BRANCHES) {
+        if (k === br.K) { target = { br, kind: 'rows' }; break; }
+        const sk = settingsKeysFor(br);
+        if (k === sk.logo || k === sk.benchmark || k === sk.serviceHm ||
+            k === sk.defaultRate || k === sk.rateSrc) {
+          target = { br, kind: 'settings' }; break;
+        }
+      }
+      if (!target) return;
+
+      if (target.kind === 'rows') {
+        try {
+          const data = JSON.parse(v);
+          if (data && Array.isArray(data.rows)) pushRowsToCloud(target.br, data.rows);
+        } catch(e) {}
+      } else {
+        pushSettingsToCloud(target.br);
+      }
+    };
+
+    const origRemoveItem = Store.removeItem.bind(Store);
+    Store.removeItem = function(k) {
+      origRemoveItem(k);
+      if (isLocalFile) return;
+      for (const br of BRANCHES) {
+        const sk = settingsKeysFor(br);
+        if (k === sk.logo || k === sk.benchmark || k === sk.serviceHm ||
+            k === sk.defaultRate || k === sk.rateSrc) {
+          pushSettingsToCloud(br); return;
+        }
+      }
     };
 
     const sel = document.getElementById('branchSel');
@@ -2147,46 +2180,77 @@ function escapeHTML(value) {
           const branch = BRANCHES.find(b => b.id === BR.id);
           if (!branch) return;
           const cloud = _cloudCache[branch.id];
-          if (cloud && cloud.updatedBy !== DEVICE_ID) {
-            applyCloud(branch, cloud);
-          }
+          if (cloud && cloud.updatedBy !== DEVICE_ID) applyCloud(branch, cloud);
         }, 150);
       });
     }
   }
 
-  function applyCloud(branch, cloud) {
-    if (BR.id !== branch.id) return;
-    
-    D.rows = cloud.rows;
-    try { localStorage.setItem(branch.K, JSON.stringify({rows: cloud.rows})); } catch(e) {}
-    
-    if (typeof render === 'function') render();
-    if (typeof renderContext === 'function') renderContext();
-    if (typeof toast === 'function') toast('☁️ Data synced from cloud', 'ok', 2000);
-  }
-
-  async function pushToCloud(branch, rows) {
+  async function pushRowsToCloud(branch, rows) {
     try {
       await db.collection(CLOUD_COLLECTION).doc(branch.id).set({
         rows: rows,
+        branchName: branch.name,
         updatedBy: DEVICE_ID,
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        branchName: branch.name
-      });
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
     } catch(e) {
-      console.error('Cloud save error:', e);
-      if (typeof toast === 'function') toast('☁️ Cloud save failed: ' + e.message, 'err', 4000);
+      console.error('Cloud save (rows) error:', e);
+      if (typeof toast === 'function') toast('☁️ Rows sync failed: ' + e.message, 'err', 4000);
     }
+  }
+
+  async function pushSettingsToCloud(branch) {
+    try {
+      await db.collection(CLOUD_COLLECTION).doc(branch.id).set({
+        settings: settingsPayload(branch),
+        branchName: branch.name,
+        updatedBy: DEVICE_ID,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    } catch(e) {
+      console.error('Cloud save (settings) error:', e);
+      if (typeof toast === 'function') toast('☁️ Settings sync failed: ' + e.message, 'err', 4000);
+    }
+  }
+
+  function applyCloud(branch, cloud) {
+    if (BR.id !== branch.id) return;
+
+    if (Array.isArray(cloud.rows)) {
+      D.rows = cloud.rows;
+      try { localStorage.setItem(branch.K, JSON.stringify({ rows: cloud.rows })); } catch(e) {}
+    }
+
+    if (cloud.settings && typeof cloud.settings === 'object') {
+      const k = settingsKeysFor(branch);
+      const put = (key, val) => {
+        if (val == null || val === '') localStorage.removeItem(key);
+        else localStorage.setItem(key, String(val));
+      };
+      put(k.logo,        cloud.settings.logo);
+      put(k.benchmark,   cloud.settings.benchmark);
+      put(k.serviceHm,   cloud.settings.serviceHm);
+      put(k.defaultRate, cloud.settings.defaultRate);
+      put(k.rateSrc,     cloud.settings.rateSrc);
+
+      const bv = parseFloat(localStorage.getItem(k.benchmark));
+      if (bv > 0 && bv <= 1000) BENCH = bv;
+
+      if (typeof loadLogo           === 'function') loadLogo();
+      if (typeof loadBenchmark      === 'function') loadBenchmark();
+      if (typeof loadServiceHm      === 'function') loadServiceHm();
+      if (typeof loadDefaultRate    === 'function') loadDefaultRate();
+      if (typeof updateRateMiniInfo === 'function') updateRateMiniInfo();
+    }
+
+    if (typeof render        === 'function') render();
+    if (typeof renderContext === 'function') renderContext();
+    if (typeof toast         === 'function') toast('☁️ Data synced from cloud', 'ok', 2000);
   }
 
   waitForApp();
 })();
-</script>
-</body>
-</html>
-<script>
-
 </script>
 </body>
 </html>
