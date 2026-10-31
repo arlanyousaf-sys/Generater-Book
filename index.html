@@ -764,11 +764,54 @@ function updateContextRow(date,field,value){
   applyDieselLock();updateLastEntryLabels();render();refreshCtxLocks();
 }
 
-function loadRow(k){$('d').value=k;fillForm();switchTab('entry');window.scrollTo({top:0,behavior:'smooth'})}
-function fillForm(){const d=$('d').value,r=D.rows.find(x=>x.d===d);$('kv').value=r?.kv??'';$('l').value=r?.l??'';const _hp=hmParts(r?.hm);$('hmH').value=_hp.h;$('hmM').value=_hp.m;$('p').value=r?.p??'';$('rt').value=(r&&r.rt!=null)?r.rt:'';if(d)$('mon').value=d.slice(0,7);applyDieselLock();updateLastEntryLabels();render();renderContext();refreshCtxLocks()}
-function saveRow(){const d=$('d').value;if(!d){toast('Pehle date chunein','err');return}const r={d,kv:num($('kv').value),l:$('l').disabled?null:num($('l').value),hm:hmJoin($('hmH').value,$('hmM').value),p:num($('p').value),rt:num($('rt').value)};const i=D.rows.findIndex(x=>x.d===d);if(i>=0)D.rows[i]=r;else D.rows.push(r);D.rows.sort((a,b)=>a.d<b.d?-1:1);save();render();renderContext();toast('Save ho gaya: '+d,'ok')}
-function delRow(){const d=$('d').value,i=D.rows.findIndex(x=>x.d===d);if(i<0){toast('Is date ki entry nahi hai','err');return}if(!confirm(d+' ki entry delete karni hai?'))return;D.rows.splice(i,1);save();clearForm(true);render();renderContext();toast('Delete ho gaya','ok')}
-function clearForm(k){['kv','l','hmH','hmM','p'].forEach(i=>$(i).value='');if(k!==true)$('d').value='';applyDieselLock()}
+function loadRow(k){$('d').value=k;fillForm();switchTab('entry');window.scrollTo({top:0,behavior:'smooth'})}function fillForm(){
+  function fillForm(){
+  const d=$('d').value, r=D.rows.find(x=>x.d===d);
+  $('kv').value = r?.kv ?? '';
+  $('l').value = r?.l ?? '';
+  const _hp = hmParts(r?.hm);
+  $('hmH').value = _hp.h;
+  $('hmM').value = _hp.m;
+  $('p').value = r?.p ?? '';
+  
+  if (r && r.rt != null) {
+      $('rt').value = r.rt;
+      $('rt').placeholder = "0.00";
+  } else {
+      $('rt').value = '';
+      let lastRate = null;
+      if (d) {
+          const prevRows = D.rows.filter(x => x.d < d && x.rt != null).sort((a,b) => a.d < b.d ? 1 : -1);
+          if (prevRows.length > 0) lastRate = prevRows[0].rt;
+      }
+      if (!lastRate) {
+          lastRate = Store.getItem(RATE_KEY);
+      }
+      $('rt').placeholder = lastRate ? `Hint: ${lastRate}` : "0.00";
+  }
+  
+  if(d) $('mon').value = d.slice(0,7);
+  applyDieselLock();
+  updateLastEntryLabels();
+  render();
+  renderContext();
+  refreshCtxLocks();
+}
+
+function saveRow(){
+  const d=$('d').value;
+  if(!d){toast('Pehle date chunein','err');return}
+  const r={d,kv:num($('kv').value),l:$('l').disabled?null:num($('l').value),hm:hmJoin($('hmH').value,$('hmM').value),p:num($('p').value),rt:num($('rt').value)};
+  const i=D.rows.findIndex(x=>x.d===d);
+  if(i>=0)D.rows[i]=r;
+  else D.rows.push(r);
+  D.rows.sort((a,b)=>a.d<b.d?-1:1);
+  save();
+  render();
+  renderContext();
+  toast('Save ho gaya: '+d,'ok');
+}
+  function clearForm(k){['kv','l','hmH','hmM','p'].forEach(i=>$(i).value='');if(k!==true)$('d').value='';applyDieselLock()}
 function resetAll(){if(!confirm(BR.name+' ka sara data delete ho jayega. Confirm?'))return;D={rows:[]};save();render();renderContext();toast('Data reset ho gaya','ok')}
 function dl(name,blob){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove()}
 function exportJSON(){const o=Object.assign({},D);o.settings={branch:BR.id,logo:Store.getItem(logoKey()),benchmark:Store.getItem(BENCH_KEY),serviceHm:Store.getItem(SERVICE_KEY),defaultRate:Store.getItem(RATE_KEY),rateSrc:Store.getItem(RATE_SRC_KEY)};dl('generator_backup_'+BR.id+'.json',new Blob([JSON.stringify(o)],{type:'application/json'}))}
