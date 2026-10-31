@@ -444,7 +444,9 @@ const BRANCHES=[{id:'tehzeeb',name:'Tehzeeb Bakery G9',slug:'Tehzeeb',K:'tehzeeb
 const BRANCH_SEL_KEY='gen_branch_sel';
 let BR=BRANCHES[0];
 let K=BR.K,SERVICE_KEY=BR.S,BENCH_KEY=BR.B;
-const logoKey=()=>BR.id==='chilman'?'chilman_logo_v1':'tehzeeb_logo_v1',RATE_KEY='tehzeeb_default_rate',RATE_SRC_KEY='tehzeeb_rate_src',DASH=17;
+const logoKey=()=>BR.id==='chilman'?'chilman_logo_v1':'tehzeeb_logo_v1',DASH=17;
+Object.defineProperty(window,'RATE_KEY',{get:()=>BR.id+'_default_rate'});
+Object.defineProperty(window,'RATE_SRC_KEY',{get:()=>BR.id+'_rate_src'});
 let BENCH=18;
 const $=id=>document.getElementById(id);
 const _mem={};
