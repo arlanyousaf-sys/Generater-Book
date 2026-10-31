@@ -2123,8 +2123,33 @@ function escapeHTML(value) {
     const cloud = _cloudCache[branch.id];
     if (!cloud) return;
 
-    const localUpdatedStr = localStorage.getItem('_local_updated_' + branch.id);
-    const localUpdated = localUpdatedStr ? parseInt(localUpdatedStr, 10) : 0;
+    let localUpdatedStr = localStorage.getItem('_local_updated_' + branch.id);
+    let localUpdated;
+    
+    if (localUpdatedStr) {
+        localUpdated = parseInt(localUpdatedStr, 10);
+    } else {
+        // 🔥 FIX: Agar timestamp nahi hai, check karo phone mein data hai kya?
+        const rawLocal = Store.getItem(branch.K);
+        let localHasData = false;
+        if (rawLocal) {
+            try {
+                const parsed = JSON.parse(rawLocal);
+                if (parsed && Array.isArray(parsed.rows) && parsed.rows.length > 0) {
+                    localHasData = true;
+                }
+            } catch(e) {}
+        }
+        
+        if (localHasData) {
+            // Phone mein data hai bina timestamp ke -> Iska matlab yeh naya hai. Upload karo!
+            localUpdated = Date.now();
+            localStorage.setItem('_local_updated_' + branch.id, localUpdated.toString());
+        } else {
+            localUpdated = 0; // Naya phone, data nahi hai
+        }
+    }
+
     const cloudUpdated = (cloud.updatedAt && typeof cloud.updatedAt.toMillis === 'function') ? cloud.updatedAt.toMillis() : 0;
 
     // Agar Local zyada naya hai -> Upload to Cloud
@@ -2153,12 +2178,10 @@ function escapeHTML(value) {
       });
     });
 
-    // 1. HAR 2 SECOND BAAD BACKGROUND SYNC
     setInterval(() => {
       if (!document.hidden && typeof BR !== 'undefined') checkAndSync(BR);
     }, 2000);
 
-    // 2. TAB SWITCH / APP FOCUS PAR SYNC
     window.addEventListener('focus', () => {
       if (typeof BR !== 'undefined') checkAndSync(BR);
     });
@@ -2217,13 +2240,13 @@ function escapeHTML(value) {
   let pushRowTimer = null;
   function debouncedPushRows(branch, rows) {
     clearTimeout(pushRowTimer);
-    pushRowTimer = setTimeout(() => pushRowsToCloud(branch, rows), 1000);
+    pushRowTimer = setTimeout(() => pushRowsToCloud(branch, rows), 500); // 0.5s delay
   }
 
   let pushSettingsTimer = null;
   function debouncedPushSettings(branch) {
     clearTimeout(pushSettingsTimer);
-    pushSettingsTimer = setTimeout(() => pushSettingsToCloud(branch), 1000);
+    pushSettingsTimer = setTimeout(() => pushSettingsToCloud(branch), 500);
   }
 
   async function pushRowsToCloud(branch, rows) {
@@ -2287,7 +2310,6 @@ function escapeHTML(value) {
       updated = true;
     }
 
-    // 🔥 FIX: Cloud se aane ke baad Local Timestamp update karo taake loop na bane
     if (cloud.updatedAt && typeof cloud.updatedAt.toMillis === 'function') {
         localStorage.setItem('_local_updated_' + branch.id, cloud.updatedAt.toMillis().toString());
     }
