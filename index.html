@@ -764,7 +764,7 @@ function updateContextRow(date,field,value){
   applyDieselLock();updateLastEntryLabels();render();refreshCtxLocks();
 }
 
-function loadRow(k){$('d').value=k;fillForm();switchTab('entry');window.scrollTo({top:0,behavior:'smooth'})}function fillForm(){
+function loadRow(k){$('d').value=k;fillForm();switchTab('entry');window.scrollTo({top:0,behavior:'smooth'})}
   function fillForm(){
   const d=$('d').value, r=D.rows.find(x=>x.d===d);
   $('kv').value = r?.kv ?? '';
