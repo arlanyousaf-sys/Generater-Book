@@ -2055,7 +2055,6 @@ function escapeHTML(value) {
 <!-- Firebase SDK (Compat Version) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-
 <script>
 (function() {
   const firebaseConfig = {
@@ -2127,6 +2126,7 @@ function escapeHTML(value) {
         const cloud = snap.data();
         if (!cloud) return;
         if (cloud.updatedBy === DEVICE_ID) return;
+        
         applyCloud(branch, cloud);
       }, err => {
         console.error('Firebase sync error:', err);
@@ -2150,6 +2150,9 @@ function escapeHTML(value) {
       }
       if (!target) return;
 
+      // Save timestamp of local update
+      localStorage.setItem('_local_updated_' + target.br.id, Date.now().toString());
+
       if (target.kind === 'rows') {
         try {
           const data = JSON.parse(v);
@@ -2168,22 +2171,11 @@ function escapeHTML(value) {
         const sk = settingsKeysFor(br);
         if (k === sk.logo || k === sk.benchmark || k === sk.serviceHm ||
             k === sk.defaultRate || k === sk.rateSrc) {
+          localStorage.setItem('_local_updated_' + br.id, Date.now().toString());
           pushSettingsToCloud(br); return;
         }
       }
     };
-
-    const sel = document.getElementById('branchSel');
-    if (sel) {
-      sel.addEventListener('change', function() {
-        setTimeout(() => {
-          const branch = BRANCHES.find(b => b.id === BR.id);
-          if (!branch) return;
-          const cloud = _cloudCache[branch.id];
-          if (cloud && cloud.updatedBy !== DEVICE_ID) applyCloud(branch, cloud);
-        }, 150);
-      });
-    }
   }
 
   async function pushRowsToCloud(branch, rows) {
@@ -2216,6 +2208,19 @@ function escapeHTML(value) {
 
   function applyCloud(branch, cloud) {
     if (BR.id !== branch.id) return;
+
+    // SMART CHECK: Kya local data cloud se naya hai?
+    const localUpdatedStr = localStorage.getItem('_local_updated_' + branch.id);
+    const localUpdated = localUpdatedStr ? parseInt(localUpdatedStr, 10) : 0;
+    
+    // Agar Cloud ka data purana hai, toh local ko overwrite mat karo, balke local ko cloud par bhej do
+    if (cloud.updatedAt && typeof cloud.updatedAt.toMillis === 'function') {
+        if (cloud.updatedAt.toMillis() < localUpdated) {
+            pushRowsToCloud(branch, D.rows);
+            pushSettingsToCloud(branch);
+            return; // Local data is newer, stop here.
+        }
+    }
 
     if (Array.isArray(cloud.rows)) {
       D.rows = cloud.rows;
