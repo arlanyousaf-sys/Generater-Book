@@ -2055,6 +2055,7 @@ function escapeHTML(value) {
 <!-- Firebase SDK (Compat Version) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
 <script>
 (function() {
   const firebaseConfig = {
@@ -2117,21 +2118,52 @@ function escapeHTML(value) {
     setupSync();
   }
 
+  function checkAndSync(branch) {
+    if (!branch) return;
+    const cloud = _cloudCache[branch.id];
+    if (!cloud) return;
+
+    const localUpdatedStr = localStorage.getItem('_local_updated_' + branch.id);
+    const localUpdated = localUpdatedStr ? parseInt(localUpdatedStr, 10) : 0;
+    const cloudUpdated = (cloud.updatedAt && typeof cloud.updatedAt.toMillis === 'function') ? cloud.updatedAt.toMillis() : 0;
+
+    // Agar Local zyada naya hai -> Upload to Cloud
+    if (localUpdated > cloudUpdated) {
+        if (BR.id === branch.id) {
+            if (typeof D !== 'undefined' && Array.isArray(D.rows)) {
+                debouncedPushRows(branch, D.rows);
+            }
+            debouncedPushSettings(branch);
+        }
+    } 
+    // Agar Cloud zyada naya hai -> Download to Local
+    else if (cloudUpdated > localUpdated && BR.id === branch.id && cloud.updatedBy !== DEVICE_ID) {
+        applyCloud(branch, cloud);
+    }
+  }
+
   function setupSync() {
     BRANCHES.forEach(branch => {
       const ref = db.collection(CLOUD_COLLECTION).doc(branch.id);
       ref.onSnapshot(snap => {
         _cloudCache[branch.id] = snap.exists ? snap.data() : null;
-        if (BR.id !== branch.id) return;
-        const cloud = snap.data();
-        if (!cloud) return;
-        if (cloud.updatedBy === DEVICE_ID) return;
-        
-        applyCloud(branch, cloud);
+        if (BR.id === branch.id) checkAndSync(branch);
       }, err => {
         console.error('Firebase sync error:', err);
-        if (typeof toast === 'function') toast('☁️ Cloud sync error: ' + err.message, 'err', 5000);
       });
+    });
+
+    // 1. HAR 2 SECOND BAAD BACKGROUND SYNC
+    setInterval(() => {
+      if (!document.hidden && typeof BR !== 'undefined') checkAndSync(BR);
+    }, 2000);
+
+    // 2. TAB SWITCH / APP FOCUS PAR SYNC
+    window.addEventListener('focus', () => {
+      if (typeof BR !== 'undefined') checkAndSync(BR);
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && typeof BR !== 'undefined') checkAndSync(BR);
     });
 
     const origSetItem = Store.setItem.bind(Store);
@@ -2143,23 +2175,21 @@ function escapeHTML(value) {
       for (const br of BRANCHES) {
         if (k === br.K) { target = { br, kind: 'rows' }; break; }
         const sk = settingsKeysFor(br);
-        if (k === sk.logo || k === sk.benchmark || k === sk.serviceHm ||
-            k === sk.defaultRate || k === sk.rateSrc) {
+        if (k === sk.logo || k === sk.benchmark || k === sk.serviceHm || k === sk.defaultRate || k === sk.rateSrc) {
           target = { br, kind: 'settings' }; break;
         }
       }
       if (!target) return;
 
-      // Save timestamp of local update
       localStorage.setItem('_local_updated_' + target.br.id, Date.now().toString());
 
       if (target.kind === 'rows') {
         try {
           const data = JSON.parse(v);
-          if (data && Array.isArray(data.rows)) pushRowsToCloud(target.br, data.rows);
+          if (data && Array.isArray(data.rows)) debouncedPushRows(target.br, data.rows);
         } catch(e) {}
       } else {
-        pushSettingsToCloud(target.br);
+        debouncedPushSettings(target.br);
       }
     };
 
@@ -2169,13 +2199,31 @@ function escapeHTML(value) {
       if (isLocalFile) return;
       for (const br of BRANCHES) {
         const sk = settingsKeysFor(br);
-        if (k === sk.logo || k === sk.benchmark || k === sk.serviceHm ||
-            k === sk.defaultRate || k === sk.rateSrc) {
+        if (k === sk.logo || k === sk.benchmark || k === sk.serviceHm || k === sk.defaultRate || k === sk.rateSrc) {
           localStorage.setItem('_local_updated_' + br.id, Date.now().toString());
-          pushSettingsToCloud(br); return;
+          debouncedPushSettings(br); return;
         }
       }
     };
+
+    const sel = document.getElementById('branchSel');
+    if (sel) {
+      sel.addEventListener('change', function() {
+        setTimeout(() => checkAndSync(BR), 150);
+      });
+    }
+  }
+
+  let pushRowTimer = null;
+  function debouncedPushRows(branch, rows) {
+    clearTimeout(pushRowTimer);
+    pushRowTimer = setTimeout(() => pushRowsToCloud(branch, rows), 1000);
+  }
+
+  let pushSettingsTimer = null;
+  function debouncedPushSettings(branch) {
+    clearTimeout(pushSettingsTimer);
+    pushSettingsTimer = setTimeout(() => pushSettingsToCloud(branch), 1000);
   }
 
   async function pushRowsToCloud(branch, rows) {
@@ -2186,9 +2234,9 @@ function escapeHTML(value) {
         updatedBy: DEVICE_ID,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
+      localStorage.setItem('_local_updated_' + branch.id, Date.now().toString());
     } catch(e) {
       console.error('Cloud save (rows) error:', e);
-      if (typeof toast === 'function') toast('☁️ Rows sync failed: ' + e.message, 'err', 4000);
     }
   }
 
@@ -2200,31 +2248,20 @@ function escapeHTML(value) {
         updatedBy: DEVICE_ID,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
+      localStorage.setItem('_local_updated_' + branch.id, Date.now().toString());
     } catch(e) {
       console.error('Cloud save (settings) error:', e);
-      if (typeof toast === 'function') toast('☁️ Settings sync failed: ' + e.message, 'err', 4000);
     }
   }
 
   function applyCloud(branch, cloud) {
     if (BR.id !== branch.id) return;
-
-    // SMART CHECK: Kya local data cloud se naya hai?
-    const localUpdatedStr = localStorage.getItem('_local_updated_' + branch.id);
-    const localUpdated = localUpdatedStr ? parseInt(localUpdatedStr, 10) : 0;
-    
-    // Agar Cloud ka data purana hai, toh local ko overwrite mat karo, balke local ko cloud par bhej do
-    if (cloud.updatedAt && typeof cloud.updatedAt.toMillis === 'function') {
-        if (cloud.updatedAt.toMillis() < localUpdated) {
-            pushRowsToCloud(branch, D.rows);
-            pushSettingsToCloud(branch);
-            return; // Local data is newer, stop here.
-        }
-    }
+    let updated = false;
 
     if (Array.isArray(cloud.rows)) {
       D.rows = cloud.rows;
       try { localStorage.setItem(branch.K, JSON.stringify({ rows: cloud.rows })); } catch(e) {}
+      updated = true;
     }
 
     if (cloud.settings && typeof cloud.settings === 'object') {
@@ -2247,11 +2284,19 @@ function escapeHTML(value) {
       if (typeof loadServiceHm      === 'function') loadServiceHm();
       if (typeof loadDefaultRate    === 'function') loadDefaultRate();
       if (typeof updateRateMiniInfo === 'function') updateRateMiniInfo();
+      updated = true;
     }
 
-    if (typeof render        === 'function') render();
-    if (typeof renderContext === 'function') renderContext();
-    if (typeof toast         === 'function') toast('☁️ Data synced from cloud', 'ok', 2000);
+    // 🔥 FIX: Cloud se aane ke baad Local Timestamp update karo taake loop na bane
+    if (cloud.updatedAt && typeof cloud.updatedAt.toMillis === 'function') {
+        localStorage.setItem('_local_updated_' + branch.id, cloud.updatedAt.toMillis().toString());
+    }
+
+    if (updated) {
+      if (typeof render        === 'function') render();
+      if (typeof renderContext === 'function') renderContext();
+      if (typeof toast         === 'function') toast('☁️ Data auto-synced from cloud', 'ok', 2000);
+    }
   }
 
   waitForApp();
