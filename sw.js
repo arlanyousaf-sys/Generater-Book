@@ -1,4 +1,4 @@
-const CACHE = 'gen-report-v1';
+const CACHE = 'gen-report-v2';
 const SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 const FIREBASE_LIBS = 'www.gstatic.com';
 
